@@ -72,7 +72,7 @@ const mapHighlightsRanges = (value, highlights) => {
  * textComponentProps: object
  */
 export const SelectableText = ({
-  onSelection, onHighlightPress, textValueProp, value, TextComponent,
+  onSelection, onNotHighlightPress, onHighlightPress, textValueProp, value, TextComponent,
   textComponentProps, ...props
 }) => {
   const usesTextComponent = !TextComponent;
@@ -87,7 +87,10 @@ export const SelectableText = ({
   const onHighlightPressNative = onHighlightPress
     ? Platform.OS === 'ios'
       ? ({ nativeEvent: { clickedRangeStart, clickedRangeEnd } }) => {
-        if (!props.highlights || props.highlights.length === 0) return
+        if (!props.highlights || props.highlights.length === 0) {
+          onNotHighlightPress && onNotHighlightPress();
+          return;
+        }
 
         const mergedHighlights = combineHighlights(props.highlights)
 
@@ -97,6 +100,8 @@ export const SelectableText = ({
 
         if (hightlightInRange) {
           onHighlightPress(hightlightInRange.id)
+        } else {
+          onNotHighlightPress && onNotHighlightPress();
         }
       }
       : onHighlightPress
@@ -121,13 +126,16 @@ export const SelectableText = ({
             onPress={() => {
               if (isHighlight) {
                 onHighlightPress && onHighlightPress(id)
+              } else {
+                onNotHighlightPress && onNotHighlightPress();
               }
             }}
+            onLongPress={() => null}
           >
             {text}
           </Text>
         ))
-        : [value]
+        : [<Text key={v4()} selectable onPress={onNotHighlightPress} onLongPress={() => null}>{value}</Text>]
     );
     if (props.appendToChildren) {
       textValue.push(props.appendToChildren);
