@@ -1,62 +1,78 @@
 import React from 'react'
 import { Text, requireNativeComponent, Platform } from 'react-native'
 import { v4 } from 'uuid'
-import memoize from 'fast-memoize'
 
 const RNSelectableText = requireNativeComponent('RNSelectableText')
 
-/**
- * numbers: array({start: int, end: int, id: string})
- */
-const combineHighlights = memoize(numbers => {
-  return numbers
-    .sort((a, b) => a.start - b.start || a.end - b.end)
-    .reduce(function (combined, next) {
-      if (!combined.length || combined[combined.length - 1].end < next.start) combined.push(next)
-      else {
-        var prev = combined.pop()
-        combined.push({
-          start: prev.start,
-          end: Math.max(prev.end, next.end),
-          id: next.id,
-        })
-      }
-      return combined
-    }, [])
-})
+const BUILT_IN_STYLES = {
+  BOLD: {
+    fontWeight: 'bold',
+  },
+  ITALIC: {
+    fontStyle: 'italic',
+  },
+  LINK: {
+    textDecorationLine: 'underline',
+  },
+  UNDERLINE: {
+    textDecorationLine: 'underline',
+  },
+  STRIKETHROUGH: {
+    textDecorationLine: 'line-through',
+  },
+}
 
 /**
- * value: string
+ * text: string
  * highlights: array({start: int, end: int, id: any})
+ * otherInlineStyleRanges: array({start: int, end: int, style: string})
+ * 
+ * returns
+ * { text, highlightId, rangeStyle }
  */
-const mapHighlightsRanges = (value, highlights) => {
-  const combinedHighlights = combineHighlights(highlights)
+const mapStyleRanges = (text, highlights, otherInlineStyleRanges = []) => {
+  const parsedStyleRanges = [];
 
-  if (combinedHighlights.length === 0) return [{ isHighlight: false, text: value }]
+  const attrTriplets = [];
+  highlights.forEach(({ start, end, id }) => {
+    attrTriplets.push({ value: start, isEndValue: false, attrs: { attrId: id, highlightId: id } });
+    attrTriplets.push({ value: end, isEndValue: true, attrs: { attrId: id, highlightId: id } });
+  });
+  otherInlineStyleRanges.forEach(({ start, end, style }, index) => {
+    attrTriplets.push({ value: start, isEndValue: false, attrs: { attrId: `inline-style-${index}`, style: BUILT_IN_STYLES[style] } });
+    attrTriplets.push({ value: end, isEndValue: true, attrs: { attrId: `inline-style-${index}`, style: BUILT_IN_STYLES[style] } });
+  });
 
-  const data = [{ isHighlight: false, text: value.slice(0, combinedHighlights[0].start) }]
+  attrTriplets.sort((a, b) => a.value - b.value);
 
-  combinedHighlights.forEach(({ id, start, end }, idx) => {
-    data.push({
-      isHighlight: true,
-      text: value.slice(start, end),
-      id
-    })
+  const currentAttrs = [];
+  for (let i = 0; i < attrTriplets.length - 1; i++) {
+    const firstTriplet = attrTriplets[i];
+    const secondTriplet = attrTriplets[i + 1];
 
-    if (combinedHighlights[idx + 1]) {
-      data.push({
-        isHighlight: false,
-        text: value.slice(end, combinedHighlights[idx + 1].start),
-      })
+    if (!firstTriplet.isEndValue) currentAttrs.push(firstTriplet.attrs);
+    else {
+      const attrIndex = currentAttrs.findIndex(el => el.attrId === firstTriplet.attrs.attrId);
+      if (attrIndex !== -1) currentAttrs.splice(attrIndex, 1);
     }
-  })
 
-  data.push({
-    isHighlight: false,
-    text: value.slice(combinedHighlights[combinedHighlights.length - 1].end, value.length),
-  })
+    const parsedAttrs = currentAttrs.map(({ highlightId, style }) => ({ highlightId, style }));
+    parsedStyleRanges.push({ start: firstTriplet.value, end: secondTriplet.value, attrs: parsedAttrs });
+  }
 
-  return data.filter(x => x.text)
+  const firstRangeStart = parsedStyleRanges[0].start;
+  if (firstRangeStart !== 0) parsedStyleRanges.unshift({ start: 0, end: firstRangeStart, attrs: [] });
+
+  const lastRangeEnd = parsedStyleRanges[parsedStyleRanges.length - 1].end;
+  if (lastRangeEnd !== text.length) parsedStyleRanges.push({ start: lastRangeEnd, end: text.length, attrs: [] });
+
+  const result = parsedStyleRanges.map(el => {
+    const highlightIds = el.attrs.map(attr => attr.highlightId).filter(attr => Boolean(attr));
+    const styles = el.attrs.map(attr => attr.style).filter(attr => Boolean(attr));
+    return { text: text.slice(el.start, el.end), highlightIds, styles };
+  });
+
+  return result;
 }
 
 /**
@@ -72,7 +88,7 @@ const mapHighlightsRanges = (value, highlights) => {
  * textComponentProps: object
  */
 export const SelectableText = ({
-  onSelection, onNotHighlightPress, onHighlightPress, textValueProp, value, TextComponent,
+  inlineStyles, highlightColor, onSelection, onNotHighlightPress, onHighlightPress, textValueProp, value, TextComponent,
   textComponentProps, ...props
 }) => {
   const usesTextComponent = !TextComponent;
@@ -92,17 +108,12 @@ export const SelectableText = ({
           return;
         }
 
-        const mergedHighlights = combineHighlights(props.highlights)
-
-        const hightlightInRange = mergedHighlights.find(
+        const hightlightInRange = props.highlights.find(
           ({ start, end }) => clickedRangeStart >= start - 1 && clickedRangeEnd <= end + 1,
         )
 
-        if (hightlightInRange) {
-          onHighlightPress(hightlightInRange.id)
-        } else {
-          onNotHighlightPress && onNotHighlightPress();
-        }
+        if (hightlightInRange) onHighlightPress(hightlightInRange.id)
+        else onNotHighlightPress && onNotHighlightPress();
       }
       : onHighlightPress
     : () => { }
@@ -112,23 +123,14 @@ export const SelectableText = ({
   if (usesTextComponent) {
     textValue = (
       props.highlights && props.highlights.length > 0
-        ? mapHighlightsRanges(value, props.highlights).map(({ id, isHighlight, text }) => (
+        ? mapStyleRanges(value, props.highlights, inlineStyles).map(({ text, highlightIds, styles }) => (
           <Text
             key={v4()}
             selectable
-            style={
-              isHighlight
-                ? {
-                  backgroundColor: props.highlightColor,
-                }
-                : {}
-            }
+            style={[...styles, highlightIds?.[0] ? { backgroundColor: highlightColor } : {}]}
             onPress={() => {
-              if (isHighlight) {
-                onHighlightPress && onHighlightPress(id)
-              } else {
-                onNotHighlightPress && onNotHighlightPress();
-              }
+              if (highlightIds?.[0]) onHighlightPress && onHighlightPress(highlightIds?.[0])
+              else onNotHighlightPress && onNotHighlightPress();
             }}
             onLongPress={() => null}
           >
